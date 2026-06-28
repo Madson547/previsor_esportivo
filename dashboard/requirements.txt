@@ -1,0 +1,6 @@
+streamlit
+supabase
+beautifulsoup4
+requests
+pandas
+python-dotenv
