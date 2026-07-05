@@ -351,11 +351,13 @@ def coletar_ge() -> list:
 
 def atualizar_feed():
     print("[FEED] Buscando notícias Série A...")
-    total = 0
-    for texto in coletar_ge():
+    coletadas = coletar_ge()
+    salvas = 0
+    for texto in coletadas:
         salvar_noticia(texto, fonte="GE")
-        total += 1
-    print(f"[FEED] {total} notícias salvas.")
+        salvas += 1
+    print(f"[FEED] {salvas} notícias salvas.")
+    return {"coletadas": len(coletadas), "salvas": salvas}
 
 # ==========================================================
 # FUNÇÃO PRINCIPAL
