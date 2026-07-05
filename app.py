@@ -1,147 +1,306 @@
-import os
-os.makedirs("dashboard", exist_ok=True)
+# ==========================================================
+# Predictor Pro 3.0
+# dashboard/app.py — Interface Streamlit
+# ==========================================================
 
-with open("dashboard/app.py", "w", encoding="utf-8") as f:
-    f.write('''import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import requests
-from bs4 import BeautifulSoup
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# ==========================================
-# 1. MOTOR DE INTELIGÊNCIA ARTIFICIAL
-# ==========================================
-def treinar_e_prever_ia(dados_estatisticos, texto_noticias):
-    np.random.seed(42)
-    dados_treino = {
-        'media_gols_casa': np.random.uniform(0.5, 2.5, 150), 'media_gols_fora': np.random.uniform(0.3, 1.8, 150),
-        'media_cantos_casa': np.random.uniform(4.0, 7.5, 150), 'media_cantos_fora': np.random.uniform(3.0, 6.0, 150),
-        'media_cartoes_casa': np.random.uniform(1.5, 4.0, 150), 'media_cartoes_fora': np.random.uniform(2.0, 4.5, 150),
-        'resultado': np.random.choice(, 150), 'gols': np.random.randint(0, 5, 150),
-        'cantos': np.random.randint(5, 15, 150), 'cartoes': np.random.randint(1, 9, 150)
+import streamlit as st
+from banco import (
+    banco_online, conectar,
+    carregar_times, carregar_tabela_serie_a,
+    carregar_rodada_atual, carregar_noticias
+)
+from previsao import prever_jogo
+from raspador import atualizar_dados_api, atualizar_feed
+
+# ==========================================================
+# CONFIGURAÇÃO DA PÁGINA
+# ==========================================================
+
+st.set_page_config(
+    page_title="Predictor Pro 3.0",
+    page_icon="⚽",
+    layout="wide",
+)
+
+st.markdown("""
+<style>
+    .block-container { padding-top: 1.5rem; }
+    .prob-card {
+        background: #1e2130;
+        border-radius: 12px;
+        padding: 20px 10px;
+        text-align: center;
     }
-    df_treino = pd.DataFrame(dados_treino)
-    X = df_treino[['media_gols_casa', 'media_gols_fora', 'media_cantos_casa', 'media_cantos_fora', 'media_cartoes_casa', 'media_cartoes_fora']]
-    
-    clf_vencedor = RandomForestClassifier(n_estimators=100, random_state=42).fit(X, df_treino['resultado'])
-    reg_gols = RandomForestRegressor(n_estimators=100, random_state=42).fit(X, df_treino['gols'])
-    reg_cantos = RandomForestRegressor(n_estimators=100, random_state=42).fit(X, df_treino['cantos'])
-    reg_cartoes = RandomForestRegressor(n_estimators=100, random_state=42).fit(X, df_treino['cartoes'])
-    
-    df_confronto = pd.DataFrame([dados_estatisticos])
-    prob = clf_vencedor.predict_proba(df_confronto)
-    p_gols = reg_gols.predict(df_confronto)
-    p_cantos = reg_cantos.predict(df_confronto)
-    p_cartoes = reg_cartoes.predict(df_confronto)
-    
-    p_casa, p_empate, p_fora = prob * 100, prob * 100, prob * 100
-    
-    texto_analise = texto_noticias.lower()
-    st_analise_ia = []
-    
-    if any(t in texto_analise for t in ["desfalque", "reserva", "poupado", "crise", "atraso"]):
-        p_casa -= 12
-        p_fora += 8
-        p_empate += 4
-        p_gols -= 0.35
-        st_analise_ia.append("AVISO DA IA: Desfalques criticos identificados. Forca ofensiva afetada.")
-        
-    if any(t in texto_analise for t in ["tenso", "revanche", "classico", "rigoroso", "juiz"]):
-        p_cartoes += 1.6
-        st_analise_ia.append("AVISO DA IA: Clima de alta rivalidade. Tendencia de cartoes aumentada.")
+    .prob-label { color: #aaa; font-size: 13px; margin-bottom: 4px; }
+    .prob-time  { font-weight: bold; font-size: 15px; margin-bottom: 8px; }
+    .prob-value { font-size: 26px; font-weight: bold; }
+    .verde   { color: #00e676; }
+    .amarelo { color: #ffd600; }
+    .vermelho{ color: #ff5252; }
+    .noticia-item { padding: 6px 0; border-bottom: 1px solid #2a2d3e; font-size: 14px; }
+    .tag-fonte { background:#2a2d3e; color:#aaa; border-radius:4px;
+                 padding:1px 6px; font-size:11px; margin-left:6px; }
+</style>
+""", unsafe_allow_html=True)
 
-    if not st_analise_ia:
-        st_analise_ia.append("STATUS DA IA: Cenário padrão sem anomalias de notícias.")
-        
-    soma = p_casa + p_empate + p_fora
-    return {
-        'vitoria_casa': (p_casa / soma) * 100, 'empate': (p_empate / soma) * 100, 'vitoria_fora': (p_fora / soma) * 100,
-        'gols': round(p_gols, 2), 'cantos': round(p_cantos, 1), 'cartoes': round(p_cartoes, 1), 'alertas': st_analise_ia
-    }
+# ==========================================================
+# HEADER
+# ==========================================================
 
-# ==========================================
-# 2. ROBÔ DE EXTRAÇÃO DE NOTÍCIAS (GE)
-# ==========================================
-def buscar_feed_ge_real():
-    try:
-        url = "https://globo.com"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        resposta = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(resposta.text, 'html.parser')
-        manchetes = [item.text.strip() for item in soup.find_all(['h2', 'a'], class_=["feed-post-link", "gui-color-hover"]) if len(item.text.strip()) > 15]
-        return " | ".join(manchetes[:6]) if manchetes else "Sem desfalques reportados nas ultimas horas."
-    except Exception:
-        return "Modo simulado ativo para analise de bastidores."
+st.title("Predictor Pro 3.0")
 
-# ==========================================
-# 3. TABELA REAL DE TIMES (ATUALIZADA DA SUA IMAGEM)
-# ==========================================
-st.set_page_config(page_title="Predictor Pro", layout="wide")
-st.title("Sports Predictor Pro - Serie B REAL")
+online = banco_online()
+if online:
+    st.success("Supabase conectado")
+else:
+    st.error("Supabase offline — verifique as credenciais")
 
-if 'feed' not in st.session_state:
-    st.session_state['feed'] = buscar_feed_ge_real()
+# ==========================================================
+# ABAS
+# ==========================================================
 
-# Dicionario calibrado conforme a realidade da sua tabela (Vila Nova/Sport fortes, Ponte/America em crise)
-dados_times = {
-    "Vila Nova": {"g_casa": 1.9, "g_fora": 1.2, "c_casa": 6.2, "c_fora": 4.5, "cart_casa": 2.0, "cart_fora": 2.5},
-    "Sao Bernardo": {"g_casa": 1.6, "g_fora": 1.1, "c_casa": 5.8, "c_fora": 4.3, "cart_casa": 2.2, "cart_fora": 2.9},
-    "Sport": {"g_casa": 1.8, "g_fora": 1.1, "c_casa": 6.5, "c_fora": 4.9, "cart_casa": 1.9, "cart_fora": 2.6},
-    "Juventude": {"g_casa": 1.4, "g_fora": 1.0, "c_casa": 5.4, "c_fora": 4.2, "cart_casa": 2.4, "cart_fora": 3.1},
-    "Operario-PR": {"g_casa": 1.5, "g_fora": 0.9, "c_casa": 5.5, "c_fora": 4.0, "cart_casa": 2.1, "cart_fora": 2.8},
-    "Fortaleza": {"g_casa": 1.6, "g_fora": 0.9, "c_casa": 5.9, "c_fora": 4.1, "cart_casa": 2.3, "cart_fora": 3.0},
-    "Novorizontino": {"g_casa": 1.5, "g_fora": 1.1, "c_casa": 5.6, "c_fora": 4.6, "cart_casa": 2.2, "cart_fora": 2.9},
-    "Criciuma": {"g_casa": 1.4, "g_fora": 1.0, "c_casa": 5.3, "c_fora": 4.2, "cart_casa": 2.4, "cart_fora": 3.2},
-    "Nautico": {"g_casa": 1.6, "g_fora": 0.9, "c_casa": 5.7, "c_fora": 4.3, "cart_casa": 2.5, "cart_fora": 3.4},
-    "Cuiaba": {"g_casa": 1.2, "g_fora": 0.7, "c_casa": 4.8, "c_fora": 3.6, "cart_casa": 2.1, "cart_fora": 2.7},
-    "Athletic Club": {"g_casa": 1.4, "g_fora": 0.9, "c_casa": 5.2, "c_fora": 4.0, "cart_casa": 2.3, "cart_fora": 3.1},
-    "Goias": {"g_casa": 1.3, "g_fora": 0.8, "c_casa": 5.1, "c_fora": 3.9, "cart_casa": 2.6, "cart_fora": 3.5},
-    "Atletico-GO": {"g_casa": 1.4, "g_fora": 0.8, "c_casa": 5.3, "c_fora": 4.1, "cart_casa": 2.4, "cart_fora": 3.2},
-    "Ceara": {"g_casa": 1.5, "g_fora": 0.8, "c_casa": 5.6, "c_fora": 4.2, "cart_casa": 2.5, "cart_fora": 3.3},
-    "Botafogo-SP": {"g_casa": 1.2, "g_fora": 0.7, "c_casa": 4.9, "c_fora": 3.7, "cart_casa": 2.3, "cart_fora": 3.2},
-    "CRB": {"g_casa": 1.4, "g_fora": 0.7, "c_casa": 5.2, "c_fora": 3.8, "cart_casa": 2.4, "cart_fora": 3.1},
-    "Londrina": {"g_casa": 1.3, "g_fora": 0.6, "c_casa": 5.0, "c_fora": 3.7, "cart_casa": 2.5, "cart_fora": 3.4},
-    "Avai": {"g_casa": 1.2, "g_fora": 0.7, "c_casa": 4.9, "c_fora": 3.9, "cart_casa": 2.6, "cart_fora": 3.5},
-    "Ponte Preta": {"g_casa": 1.1, "g_fora": 0.6, "c_casa": 4.7, "c_fora": 3.5, "cart_casa": 2.7, "cart_fora": 3.7},
-    "America-MG": {"g_casa": 1.0, "g_fora": 0.5, "c_casa": 4.5, "c_fora": 3.4, "cart_casa": 2.6, "cart_fora": 3.6}
-}
+aba1, aba2, aba3, aba4 = st.tabs([
+    "🎯 Preditor",
+    "📅 Jogos da Rodada",
+    "📊 Tabela Série B",
+    "📰 Últimas Notícias",
+])
 
-times_ordenados = sorted(list(dados_times.keys()))
 
-c1, c2 = st.columns(2)
-with c1:
-    st.subheader("Configurar Jogo Real (14a Rodada)")
-    tc = st.selectbox("Time da Casa:", times_ordenados, index=times_ordenados.index("Ponte Preta"))
-    tf = st.selectbox("Time de Fora:", times_ordenados, index=times_ordenados.index("Novorizontino"))
-    noticias = st.text_area("Informacoes de Bastidores (GE):", value=st.session_state['feed'], height=150)
+# ----------------------------------------------------------
+# ABA 1 — PREDITOR
+# ----------------------------------------------------------
+with aba1:
 
-with c2:
-    st.subheader("Projecao do Sistema")
-    if tc == tf:
-        st.error("Escolha times diferentes.")
+    ok_times, lista_times = carregar_times()
+    times_disponiveis = lista_times if ok_times else []
+
+    if not times_disponiveis:
+        st.warning("Nenhum time encontrado. Atualize os dados na aba Tabela.")
+        times_disponiveis = ["Flamengo", "Palmeiras"]   # fallback visual
+
+    col_casa, col_fora = st.columns(2)
+    with col_casa:
+        st.caption("Time da Casa")
+        time_casa = st.selectbox("Casa", times_disponiveis,
+                                 label_visibility="collapsed", key="sel_casa")
+    with col_fora:
+        st.caption("Time de Fora")
+        time_fora = st.selectbox("Fora", times_disponiveis,
+                                 index=min(1, len(times_disponiveis) - 1),
+                                 label_visibility="collapsed", key="sel_fora")
+
+    st.divider()
+
+    if time_casa == time_fora:
+        st.warning("Selecione times diferentes.")
     else:
-        stats = {
-            'media_gols_casa': dados_times[tc]['g_casa'], 'media_gols_fora': dados_times[tf]['g_fora'],
-            'media_cantos_casa': dados_times[tc]['c_casa'], 'media_cantos_fora': dados_times[tf]['c_fora'],
-            'media_cartoes_casa': dados_times[tc]['cart_casa'], 'media_cartoes_fora': dados_times[tf]['cart_fora']
-        }
-        
-        res = treinar_e_prever_ia(stats, noticias)
-        for alert in res['alertas']:
-            st.warning(alert)
-            
-        fig = px.pie(
-            pd.DataFrame({"Resultado": [tc, "Empate", tf], "Probabilidade": [res['vitoria_casa'], res['empate'], res['vitoria_fora']]}), 
-            values="Probabilidade", names="Resultado", title="Chances de Vitoria (1X2)"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Gols Projetados", res['gols'])
-        m2.metric("Escanteios Projetados", res['cantos'])
-        m3.metric("Cartões Projetados", res['cartoes'])
-''')
+        with st.spinner("Calculando previsão..."):
+            resultado = prever_jogo(time_casa, time_fora)
 
-print("Correção aplicada! Os 20 times de verdade da imagem foram injetados no código.")
+        prob = resultado.get("probabilidades", {})
+        p_casa   = prob.get("casa", 0)
+        p_empate = prob.get("empate", 0)
+        p_fora   = prob.get("fora", 0)
+
+        # Cards de probabilidade
+        st.subheader("Probabilidades 1X2")
+        c1, c2, c3 = st.columns(3)
+
+        with c1:
+            cor = "verde" if p_casa > p_fora else "vermelho"
+            st.markdown(f"""
+            <div class="prob-card">
+              <div class="prob-label">Casa</div>
+              <div class="prob-time">{time_casa}</div>
+              <div class="prob-value {cor}">{p_casa}%</div>
+            </div>""", unsafe_allow_html=True)
+
+        with c2:
+            st.markdown(f"""
+            <div class="prob-card">
+              <div class="prob-label">Empate</div>
+              <div class="prob-time">—</div>
+              <div class="prob-value amarelo">{p_empate}%</div>
+            </div>""", unsafe_allow_html=True)
+
+        with c3:
+            cor = "verde" if p_fora > p_casa else "vermelho"
+            st.markdown(f"""
+            <div class="prob-card">
+              <div class="prob-label">Fora</div>
+              <div class="prob-time">{time_fora}</div>
+              <div class="prob-value {cor}">{p_fora}%</div>
+            </div>""", unsafe_allow_html=True)
+
+        st.divider()
+
+        # Detalhes do modelo
+        with st.expander("🔍 Detalhes do cálculo"):
+            forca = resultado.get("forca", {})
+            tabela_pos = resultado.get("tabela", {})
+            n_noticias = resultado.get("noticias_analisadas", 0)
+
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                st.markdown(f"**{time_casa}**")
+                st.write(f"📍 Posição na tabela: **{tabela_pos.get('posicao_casa', '?')}º**")
+                st.write(f"💪 Força base (tabela): `{forca.get('casa_base', 0):.4f}`")
+                st.write(f"🎯 Eficiência de conversão: `{forca.get('eficiencia_casa', 'sem dado')}`")
+                st.write(f"📰 Ajuste notícias: `{forca.get('ajuste_casa', 0):+.3f}`")
+                st.write(f"⚡ Força final: `{forca.get('casa_final', 0):.4f}`")
+            with col_d2:
+                st.markdown(f"**{time_fora}**")
+                st.write(f"📍 Posição na tabela: **{tabela_pos.get('posicao_fora', '?')}º**")
+                st.write(f"💪 Força base (tabela): `{forca.get('fora_base', 0):.4f}`")
+                st.write(f"🎯 Eficiência de conversão: `{forca.get('eficiencia_fora', 'sem dado')}`")
+                st.write(f"📰 Ajuste notícias: `{forca.get('ajuste_fora', 0):+.3f}`")
+                st.write(f"⚡ Força final: `{forca.get('fora_final', 0):.4f}`")
+
+            st.caption(f"Modelo: dados reais da tabela + eficiência de conversão + sentimento de {n_noticias} notícias | Fator casa: +25% (recalibrado)")
+
+        # Resultado mais provável
+        vencedor = resultado.get("vencedor_provavel", "?")
+        confianca = resultado.get("confianca", 0)
+        st.info(f"🏆 Resultado mais provável: **{vencedor}** ({confianca:.1f}% de probabilidade)")
+
+
+# ----------------------------------------------------------
+# ABA 2 — JOGOS DA RODADA
+# ----------------------------------------------------------
+with aba2:
+    ok_rodada, partidas = carregar_rodada_atual()
+
+    col_r1, col_r2 = st.columns([3, 1])
+    with col_r1:
+        if partidas:
+            rodada_num = partidas[0].get("rodada", "?")
+            st.subheader(f"Rodada {rodada_num}")
+        else:
+            st.subheader("Rodada Atual")
+
+    with col_r2:
+        if st.button("🔄 Atualizar dados", key="btn_rodada"):
+            with st.spinner("Buscando dados da API..."):
+                atualizar_dados_api()
+            st.rerun()
+
+    if ok_rodada and partidas:
+        for p in partidas:
+            status = p.get("status", "agendada")
+            data   = p.get("data", "")[:10] if p.get("data") else ""
+            hora   = p.get("hora", "")[:5]  if p.get("hora") else ""
+            mandante  = p.get("mandante", "?")
+            visitante = p.get("visitante", "?")
+            gm = p.get("gols_mandante")
+            gv = p.get("gols_visitante")
+
+            if gm is not None and gv is not None:
+                placar_str = f"**{gm} x {gv}**"
+                badge = "🟢" if status == "encerrada" else "🟡"
+            else:
+                placar_str = f"*{hora}*" if hora else "—"
+                badge = "⚪"
+
+            st.markdown(
+                f"{badge} `{data}` — {mandante} {placar_str} {visitante} "
+                f"&nbsp;&nbsp;<small>📍 {p.get('estadio', '')}</small>",
+                unsafe_allow_html=True
+            )
+    else:
+        st.info("Nenhuma partida encontrada. Clique em **Atualizar dados** para buscar da API.")
+
+
+# ----------------------------------------------------------
+# ABA 3 — TABELA SÉRIE B
+# ----------------------------------------------------------
+with aba3:
+    col_t1, col_t2 = st.columns([3, 1])
+    with col_t1:
+        st.subheader("Classificação — Série A 2026")
+    with col_t2:
+        if st.button("🔄 Atualizar tabela", key="btn_tabela"):
+            with st.spinner("Buscando tabela da API..."):
+                atualizar_dados_api()
+            st.rerun()
+
+    ok_tab, tabela = carregar_tabela_serie_a()
+
+    if ok_tab and tabela:
+        import pandas as pd
+
+        df = pd.DataFrame(tabela)
+
+        # Seleciona e renomeia colunas para exibição
+        colunas_map = {
+            "posicao":     "Pos",
+            "time":        "Time",
+            "pontos":      "Pts",
+            "jogos":       "J",
+            "vitorias":    "V",
+            "empates":     "E",
+            "derrotas":    "D",
+            "gols_pro":    "GP",
+            "gols_contra": "GC",
+            "saldo":       "SG",
+        }
+        colunas_exibir = [c for c in colunas_map if c in df.columns]
+        df_exibir = df[colunas_exibir].rename(columns=colunas_map)
+
+        # Destaque zona de acesso (top 4) e rebaixamento (bottom 4)
+        def highlight_zona(row):
+            pos = int(row["Pos"]) if str(row["Pos"]).isdigit() else 99
+            if pos <= 4:
+                return ["background-color: #1a3a1a"] * len(row)
+            if pos >= len(tabela) - 3:
+                return ["background-color: #3a1a1a"] * len(row)
+            return [""] * len(row)
+
+        st.dataframe(
+            df_exibir.style.apply(highlight_zona, axis=1),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption("🟢 Libertadores (top 4)  |  🔴 Zona de rebaixamento (bottom 4)")
+    else:
+        st.info("Tabela não encontrada. Clique em **Atualizar tabela** para buscar da API.")
+
+
+# ----------------------------------------------------------
+# ABA 4 — NOTÍCIAS
+# ----------------------------------------------------------
+with aba4:
+    col_n1, col_n2 = st.columns([3, 1])
+    with col_n1:
+        st.subheader("Últimas Notícias — Série A 2026")
+    with col_n2:
+        if st.button("🔄 Atualizar notícias", key="btn_noticias"):
+            with st.spinner("Coletando notícias..."):
+                resultado_feed = atualizar_feed()
+            st.success(
+                f"Coletadas: {resultado_feed['coletadas']} | "
+                f"Relevantes: {resultado_feed['salvas']}"
+            )
+            st.rerun()
+
+    noticias = carregar_noticias(limite=20)
+
+    if noticias:
+        for n in noticias:
+            texto = n.get("texto", "")
+            fonte = n.get("fonte", "")
+            st.markdown(
+                f'<div class="noticia-item">— {texto}'
+                f'<span class="tag-fonte">{fonte}</span></div>',
+                unsafe_allow_html=True
+            )
+    else:
+        st.info("Nenhuma notícia encontrada. Clique em **Atualizar notícias**.")
+
+    st.caption(
+        "ℹ️ Apenas notícias da Série A 2026 são salvas. "
+        "As notícias são usadas como dado qualitativo no cálculo de probabilidade."
+    )
