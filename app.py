@@ -3,9 +3,6 @@
 # dashboard/app.py — Interface Streamlit
 # ==========================================================
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import streamlit as st
 from banco import (
     banco_online, conectar,
